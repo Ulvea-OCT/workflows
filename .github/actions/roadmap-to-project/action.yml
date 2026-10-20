@@ -140,20 +140,6 @@ runs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
         done
 
-    - name: Show scheduled roadmap
-      shell: bash
-      run: |
-        echo "# Roadmap Scheduling Result" >> "$GITHUB_STEP_SUMMARY"
-        echo "" >> "$GITHUB_STEP_SUMMARY"
-
-        for json in .roadmap-build/scheduled/*.json; do
-          echo "## $(basename "$json")" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```json' >> "$GITHUB_STEP_SUMMARY"
-          cat "$json" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-        done
 
     - name: Apply roadmaps
       if: ${{ inputs.dry-run != 'true' }}
