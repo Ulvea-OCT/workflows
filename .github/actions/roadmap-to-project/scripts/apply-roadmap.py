@@ -205,38 +205,79 @@ def list_project_views(gh: GitHubClient, project_id: str) -> list[dict[str, Any]
     return data["node"]["views"]["nodes"]
 
 
-def ensure_roadmap_view(
+def ensure_project_views(
     gh: GitHubClient,
     project_id: str,
-    fields: dict[str, dict[str, Any]],
     dry_run: bool,
 ) -> None:
-    """Ensure a native GitHub Roadmap view exists.
+    """Ensure the Project has the three expected native views.
 
-    GitHub's roadmap layout uses project date/iteration fields to position items.
-    We create the Start/Target date fields before the view, so GitHub can use
-    those existing date fields when configuring the new roadmap view.
+    Tasks uses a table, Roadmap uses the native roadmap layout, and To Do List
+    uses a board. Existing views with the expected names are reused. If a view
+    with the required layout already exists under another name, it is renamed
+    instead of creating a duplicate.
     """
+    desired_views = [
+        ("Tasks", "TABLE_LAYOUT"),
+        ("Roadmap", "ROADMAP_LAYOUT"),
+        ("To Do List", "BOARD_LAYOUT"),
+    ]
+
     if dry_run:
-        print("✓ Roadmap view would be created/configured")
+        for name, layout in desired_views:
+            print(f"✓ {name} view would be created/configured ({layout})")
         return
 
     views = list_project_views(gh, project_id)
-    roadmap_view = next(
-        (view for view in views if view and view.get("layout") == "ROADMAP_LAYOUT"),
-        None,
-    )
-    if roadmap_view is None:
-        named = next((view for view in views if view and view.get("name") == "Roadmap"), None)
-        if named:
-            roadmap_view = named
 
-    if roadmap_view:
+    for name, layout in desired_views:
+        # Prefer the exact name. Otherwise reuse an existing view with the
+        # required layout to correct a wrong name and avoid duplicate tabs.
+        view = next(
+            (item for item in views if item and item.get("name") == name),
+            None,
+        )
+        if view is None:
+            view = next(
+                (item for item in views if item and item.get("layout") == layout),
+                None,
+            )
+
+        if view:
+            if view.get("name") == name and view.get("layout") == layout:
+                print(f"✓ {name} view already ready #{view.get('number')}")
+                continue
+
+            data = gh.graphql(
+                """
+                mutation($viewId:ID!, $name:String!, $layout:ProjectV2ViewLayout!) {
+                  updateProjectV2View(input:{
+                    viewId:$viewId,
+                    name:$name,
+                    layout:$layout
+                  }) {
+                    projectV2View { id name number layout }
+                  }
+                }
+                """,
+                {
+                    "viewId": view["id"],
+                    "name": name,
+                    "layout": layout,
+                },
+            )
+            updated = data["updateProjectV2View"]["projectV2View"]
+            print(f"✓ View configured: {updated['name']} #{updated['number']} ({updated['layout']})")
+            # Keep the in-memory list current so later desired views don't
+            # accidentally reuse the same view after its layout was changed.
+            view.update(updated)
+            continue
+
         data = gh.graphql(
             """
-            mutation($viewId:ID!, $name:String!, $layout:ProjectV2ViewLayout!) {
-              updateProjectV2View(input:{
-                viewId:$viewId,
+            mutation($projectId:ID!, $name:String!, $layout:ProjectV2ViewLayout!) {
+              createProjectV2View(input:{
+                projectId:$projectId,
                 name:$name,
                 layout:$layout
               }) {
@@ -245,35 +286,14 @@ def ensure_roadmap_view(
             }
             """,
             {
-                "viewId": roadmap_view["id"],
-                "name": "Roadmap",
-                "layout": "ROADMAP_LAYOUT",
+                "projectId": project_id,
+                "name": name,
+                "layout": layout,
             },
         )
-        view = data["updateProjectV2View"]["projectV2View"]
-        print(f"✓ Roadmap view ready: {view['name']} #{view['number']}")
-        return
-
-    data = gh.graphql(
-        """
-        mutation($projectId:ID!, $name:String!, $layout:ProjectV2ViewLayout!) {
-          createProjectV2View(input:{
-            projectId:$projectId,
-            name:$name,
-            layout:$layout
-          }) {
-            projectV2View { id name number layout }
-          }
-        }
-        """,
-        {
-            "projectId": project_id,
-            "name": "Roadmap",
-            "layout": "ROADMAP_LAYOUT",
-        },
-    )
-    view = data["createProjectV2View"]["projectV2View"]
-    print(f"✓ Roadmap view created: {view['name']} #{view['number']}")
+        created = data["createProjectV2View"]["projectV2View"]
+        print(f"✓ View created: {created['name']} #{created['number']} ({created['layout']})")
+        views.append(created)
 
 
 def list_project_fields(gh: GitHubClient, project_id: str) -> list[dict[str, Any]]:
@@ -691,7 +711,9 @@ def main() -> int:
         print("  [would update] Project description")
         for name in field_specs:
             print(f"  [would create/update] field: {name}")
-        print("  [would create/configure] Roadmap view")
+        print("  [would create/configure] Tasks view (TABLE_LAYOUT)")
+        print("  [would create/configure] Roadmap view (ROADMAP_LAYOUT)")
+        print("  [would create/configure] To Do List view (BOARD_LAYOUT)")
 
         print("\nISSUES")
         for task in tasks:
@@ -748,7 +770,7 @@ def main() -> int:
         fields[name] = ensure_field(gh, project["id"], name, dtype, options)
         print(f"✓ field ready: {name}")
 
-    ensure_roadmap_view(gh, project["id"], fields, False)
+    ensure_project_views(gh, project["id"], False)
 
     issue_map = {}
     project_item_ids = {}
